@@ -258,5 +258,4 @@ position in the CONTENT."
   (origami-define-markers-parser "vim-like" "{{{" "}}}"))
 
 (provide 'origami-parsers)
-
 ;;; origami-parsers.el ends here

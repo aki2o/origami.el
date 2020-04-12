@@ -846,5 +846,4 @@ uncover any bugs."
   (origami-remove-all-overlays buffer))
 
 (provide 'origami)
-
 ;;; origami.el ends here
