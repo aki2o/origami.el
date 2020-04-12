@@ -35,7 +35,6 @@
 (require 'dash)
 (require 's)
 (require 'cl-lib)
-(require 'origami-parsers)
 
 ;;; fold display mode and faces
 
@@ -43,6 +42,26 @@
   "Flexible text folding"
   :prefix "origami-"
   :group 'convenience)
+
+(defcustom origami-parser-alist
+  '((java-mode             . origami-java-parser)
+    (c-mode                . origami-c-parser)
+    (c++-mode              . origami-c-style-parser)
+    (perl-mode             . origami-c-style-parser)
+    (cperl-mode            . origami-c-style-parser)
+    (js-mode               . origami-c-style-parser)
+    (js2-mode              . origami-c-style-parser)
+    (js3-mode              . origami-c-style-parser)
+    (go-mode               . origami-c-style-parser)
+    (php-mode              . origami-c-style-parser)
+    (python-mode           . origami-python-parser)
+    (emacs-lisp-mode       . origami-elisp-parser)
+    (lisp-interaction-mode . origami-elisp-parser)
+    (clojure-mode          . origami-clj-parser)
+    (triple-braces         . origami-vim-like-markers-parser))
+  "alist mapping major-mode to parser function."
+  :type 'hook
+  :group 'origami)
 
 (defcustom origami-fold-replacement "..."
   ;; TODO: this should also be specifiable as a function: folded text -> string
@@ -95,7 +114,7 @@ header overlay should cover. Result is a cons cell of (begin . end)."
     (let ((range (origami-header-overlay-range fold-ov)))
       (move-overlay header-overlay (car range) (cdr range)))))
 
-(defun origami-header-modify-hook (header-overlay after-p b e &optional l)
+(defun origami-header-modify-hook (header-overlay after-p _b _e &optional _l)
   (if after-p (origami-header-overlay-reset-position header-overlay)))
 
 (defun origami-create-overlay (beg end offset buffer)
@@ -157,7 +176,7 @@ header overlay should cover. Result is a cons cell of (begin . end)."
   (overlay-put ov 'before-string nil)
   (overlay-put ov 'after-string nil))
 
-(defun origami-isearch-show (ov)
+(defun origami-isearch-show (_ov)
   (origami-show-node (current-buffer) (point)))
 
 (defun origami-hide-overlay-from-fold-tree-fn (node)
@@ -273,7 +292,7 @@ header overlay should cover. Result is a cons cell of (begin . end)."
 F applied to the leaf."
   (cdr
    (-reduce-r-from (lambda (node acc)
-                     (destructuring-bind (old-node . new-node) acc
+                     (cl-destructuring-bind (old-node . new-node) acc
                        (cons node (origami-fold-replace-child node old-node new-node))))
                    (let ((leaf (-last-item path))) (cons leaf (funcall f leaf)))
                    (butlast path))))
@@ -430,7 +449,59 @@ with the current state and the current node at each iteration."
 (defun origami-h-present (h)
   (when h (aref h 1)))
 
+;;; minor mode
+
+(defvar origami-mode-map
+  (let ((map (make-sparse-keymap)))
+    map)
+  "Keymap for `origami-mode'.")
+
+(defcustom origami-mode-hook nil
+  "Hook called when origami minor mode is activated or deactivated."
+  :type 'hook
+  :group 'origami)
+
+(defun origami-find-occurrence-show-node ()
+  (call-interactively 'origami-show-node))
+
+;;;###autoload
+(define-minor-mode origami-mode
+  "Minor mode to selectively hide/show text in the current buffer.
+With a prefix argument ARG, enable the mode if ARG is positive,
+and disable it otherwise.  If called from Lisp, enable the mode
+if ARG is omitted or nil.
+
+Lastly, the normal hook `origami-mode-hook' is run using
+`run-hooks'.
+
+Key bindings:
+\\{origami-mode-map}"
+  :group 'origami
+  :lighter nil
+  :keymap origami-mode-map
+  :init-value nil
+  (if origami-mode
+      (progn
+        (add-hook 'occur-mode-find-occurrence-hook
+                  'origami-find-occurrence-show-node nil t)
+        (setq next-error-move-function (lambda (ignored pos)
+                                         (goto-char pos)
+                                         (call-interactively 'origami-show-node)))
+        (add-hook 'clone-indirect-buffer-hook
+                  (lambda () (origami-reset (current-buffer)))))
+    (remove-hook 'occur-mode-find-occurrence-hook
+                 'origami-find-occurrence-show-node t)
+    (setq next-error-move-function nil))
+  (origami-reset (current-buffer)))
+
+;;;###autoload
+(define-global-minor-mode global-origami-mode origami-mode
+  (lambda () (origami-mode 1)))
+
 ;;; interactive utils
+
+(defvar origami-history nil)
+(defvar origami-tree-tick nil)
 
 (defun origami-setup-local-vars (buffer)
   (with-current-buffer buffer
@@ -499,7 +570,7 @@ otherwise fetch cached tree."
         (origami-build-tree buffer (origami-get-parser buffer))
       (origami-get-cached-tree buffer))))
 
-(defun origami-apply-new-tree (buffer old-tree new-tree)
+(defun origami-apply-new-tree (old-tree new-tree)
   (when new-tree
     (origami-fold-diff old-tree new-tree
                        'origami-hide-overlay-from-fold-tree-fn
@@ -528,10 +599,10 @@ will be the deepest nested at POINT."
   (interactive (list (current-buffer) (point)))
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
-      (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                           buffer
-                                           (origami-fold-assoc path (lambda (node)
-                                                                      (origami-fold-open-set node t))))))))
+      (origami-apply-new-tree tree (origami-store-cached-tree
+                                    buffer
+                                    (origami-fold-assoc path (lambda (node)
+                                                               (origami-fold-open-set node t))))))))
 
 (defun origami-open-node-recursively (buffer point)
   "Open the fold node and all of its children at POINT in BUFFER.
@@ -540,13 +611,13 @@ The fold node opened will be the deepest nested at POINT."
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
       (origami-apply-new-tree
-       buffer tree (origami-store-cached-tree
-                    buffer
-                    (origami-fold-assoc path
-                                        (lambda (node)
-                                          (origami-fold-map (lambda (node)
-                                                              (origami-fold-open-set node t))
-                                                            node))))))))
+       tree (origami-store-cached-tree
+             buffer
+             (origami-fold-assoc path
+                                 (lambda (node)
+                                   (origami-fold-map (lambda (node)
+                                                       (origami-fold-open-set node t))
+                                                     node))))))))
 
 (defun origami-show-node (buffer point)
   "Like `origami-open-node' but also opens parent fold nodes
@@ -555,12 +626,12 @@ visible."
   (interactive (list (current-buffer) (point)))
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
-      (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                           buffer
-                                           (origami-fold-path-map
-                                            (lambda (node)
-                                              (origami-fold-open-set node t))
-                                            path))))))
+      (origami-apply-new-tree tree (origami-store-cached-tree
+                                    buffer
+                                    (origami-fold-path-map
+                                     (lambda (node)
+                                       (origami-fold-open-set node t))
+                                     path))))))
 
 (defun origami-close-node (buffer point)
   "Close the fold node at POINT in BUFFER. The fold node closed
@@ -568,11 +639,11 @@ will be the deepest nested at POINT."
   (interactive (list (current-buffer) (point)))
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
-      (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                           buffer
-                                           (origami-fold-assoc
-                                            path (lambda (node)
-                                                   (origami-fold-open-set node nil))))))))
+      (origami-apply-new-tree tree (origami-store-cached-tree
+                                    buffer
+                                    (origami-fold-assoc
+                                     path (lambda (node)
+                                            (origami-fold-open-set node nil))))))))
 
 (defun origami-close-node-recursively (buffer point)
   "Close the fold node and all of its children at POINT in BUFFER.
@@ -581,13 +652,13 @@ The fold node closed will be the deepest nested at POINT."
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
       (origami-apply-new-tree
-       buffer tree (origami-store-cached-tree
-                    buffer
-                    (origami-fold-assoc path
-                                        (lambda (node)
-                                          (origami-fold-map (lambda (node)
-                                                              (origami-fold-open-set node nil))
-                                                            node))))))))
+       tree (origami-store-cached-tree
+             buffer
+             (origami-fold-assoc path
+                                 (lambda (node)
+                                   (origami-fold-map (lambda (node)
+                                                       (origami-fold-open-set node nil))
+                                                     node))))))))
 
 (defun origami-toggle-node (buffer point)
   "Toggle the fold node at POINT in BUFFER open or closed. The
@@ -595,13 +666,13 @@ fold node opened or closed will be the deepest nested at POINT."
   (interactive (list (current-buffer) (point)))
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-fold-find-path-containing tree point))
-      (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                           buffer
-                                           (origami-fold-assoc
-                                            path (lambda (node)
-                                                   (origami-fold-open-set
-                                                    node (not (origami-fold-open?
-                                                               (-last-item path)))))))))))
+      (origami-apply-new-tree tree (origami-store-cached-tree
+                                    buffer
+                                    (origami-fold-assoc
+                                     path (lambda (node)
+                                            (origami-fold-open-set
+                                             node (not (origami-fold-open?
+                                                        (-last-item path)))))))))))
 
 (defun origami-forward-toggle-node (buffer point)
   "Like `origami-toggle-node' but search forward in BUFFER for a
@@ -611,13 +682,13 @@ as `origami-toggle-node'."
   (interactive (list (current-buffer) (point)))
   (-when-let (tree (origami-get-fold-tree buffer))
     (-when-let (path (origami-search-forward-for-path buffer point))
-      (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                           buffer
-                                           (origami-fold-assoc
-                                            path (lambda (node)
-                                                   (origami-fold-open-set
-                                                    node (not (origami-fold-open?
-                                                               (-last-item path)))))))))))
+      (origami-apply-new-tree tree (origami-store-cached-tree
+                                    buffer
+                                    (origami-fold-assoc
+                                     path (lambda (node)
+                                            (origami-fold-open-set
+                                             node (not (origami-fold-open?
+                                                        (-last-item path)))))))))))
 
 (defun origami-recursively-toggle-node (buffer point)
   "Cycle a fold node between recursively closed, open and
@@ -645,23 +716,23 @@ familiar. It's easiest to grasp this just by giving it a go."
   "Recursively open every fold node in BUFFER."
   (interactive (list (current-buffer)))
   (-when-let (tree (origami-get-fold-tree buffer))
-    (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                         buffer
-                                         (origami-fold-map
-                                          (lambda (node)
-                                            (origami-fold-open-set node t))
-                                          tree)))))
+    (origami-apply-new-tree tree (origami-store-cached-tree
+                                  buffer
+                                  (origami-fold-map
+                                   (lambda (node)
+                                     (origami-fold-open-set node t))
+                                   tree)))))
 
 (defun origami-close-all-nodes (buffer)
   "Recursively close every fold node in BUFFER."
   (interactive (list (current-buffer)))
   (-when-let (tree (origami-get-fold-tree buffer))
-    (origami-apply-new-tree buffer tree (origami-store-cached-tree
-                                         buffer
-                                         (origami-fold-map
-                                          (lambda (node)
-                                            (origami-fold-open-set node nil))
-                                          tree)))))
+    (origami-apply-new-tree tree (origami-store-cached-tree
+                                  buffer
+                                  (origami-fold-map
+                                   (lambda (node)
+                                     (origami-fold-open-set node nil))
+                                   tree)))))
 
 (defun origami-toggle-all-nodes (buffer)
   "Toggle all fold nodes in the buffer recursively open or
@@ -754,7 +825,7 @@ operations undone."
   (let ((current-tree (origami-get-cached-tree buffer)))
     (origami-update-history buffer (lambda (h) (origami-h-undo h)))
     (let ((old-tree (origami-get-cached-tree buffer)))
-      (origami-apply-new-tree buffer current-tree old-tree))))
+      (origami-apply-new-tree current-tree old-tree))))
 
 (defun origami-redo (buffer)
   "Redo the last folding operation applied to BUFFER. You can
@@ -764,7 +835,7 @@ been performed to BUFFER."
   (let ((current-tree (origami-get-cached-tree buffer)))
     (origami-update-history buffer (lambda (h) (origami-h-redo h)))
     (let ((new-tree (origami-get-cached-tree buffer)))
-      (origami-apply-new-tree buffer current-tree new-tree))))
+      (origami-apply-new-tree current-tree new-tree))))
 
 (defun origami-reset (buffer)
   "Remove all folds from BUFFER and reset all origami state
@@ -773,55 +844,6 @@ uncover any bugs."
   (interactive (list (current-buffer)))
   (origami-setup-local-vars buffer)
   (origami-remove-all-overlays buffer))
-
-;;; minor mode
-
-(defvar origami-mode-map
-  (let ((map (make-sparse-keymap)))
-    map)
-  "Keymap for `origami-mode'.")
-
-(defcustom origami-mode-hook nil
-  "Hook called when origami minor mode is activated or deactivated."
-  :type 'hook
-  :group 'origami)
-
-(defun origami-find-occurrence-show-node ()
-  (call-interactively 'origami-show-node))
-
-;;;###autoload
-(define-minor-mode origami-mode
-  "Minor mode to selectively hide/show text in the current buffer.
-With a prefix argument ARG, enable the mode if ARG is positive,
-and disable it otherwise.  If called from Lisp, enable the mode
-if ARG is omitted or nil.
-
-Lastly, the normal hook `origami-mode-hook' is run using
-`run-hooks'.
-
-Key bindings:
-\\{origami-mode-map}"
-  :group 'origami
-  :lighter nil
-  :keymap origami-mode-map
-  :init-value nil
-  (if origami-mode
-      (progn
-        (add-hook 'occur-mode-find-occurrence-hook
-                  'origami-find-occurrence-show-node nil t)
-        (setq next-error-move-function (lambda (ignored pos)
-                                         (goto-char pos)
-                                         (call-interactively 'origami-show-node)))
-        (add-hook 'clone-indirect-buffer-hook
-                  (lambda () (origami-reset (current-buffer)))))
-    (remove-hook 'occur-mode-find-occurrence-hook
-                 'origami-find-occurrence-show-node t)
-    (setq next-error-move-function nil))
-  (origami-reset (current-buffer)))
-
-;;;###autoload
-(define-global-minor-mode global-origami-mode origami-mode
-  (lambda () (origami-mode 1)))
 
 (provide 'origami)
 
