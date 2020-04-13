@@ -38,14 +38,17 @@
 (defun origami-get-positions (content regex)
   "Returns a list of positions where REGEX matches in CONTENT. A
 position is a cons cell of the character and the numerical
-position in the CONTENT."
+position from first group or entire part of REGEXP."
   (with-temp-buffer
     (insert content)
     (goto-char (point-min))
     (let (acc)
       (while (re-search-forward regex nil t)
-        (let ((match (match-string 0)))
-          (setq acc (cons (cons match (- (point) (length match)))
+        (let ((string (or (match-string 1)
+                          (match-string 0)))
+              (point (or (match-beginning 1)
+                         (match-beginning 0))))
+          (setq acc (cons (cons string point)
                           acc))))
       (reverse acc))))
 
