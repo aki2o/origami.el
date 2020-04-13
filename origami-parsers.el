@@ -52,6 +52,11 @@ position from first group or entire part of REGEXP."
                           acc))))
       (reverse acc))))
 
+(defun origami-has-any-face? (s faces)
+  (let ((face (get-text-property 0 'face s)))
+    (-any? (lambda (f) (memq f faces))
+           (if (listp face) face (list face)))))
+
 ;;;###autoload
 (defun origami-indent-parser (content)
   (cl-labels ((lines (string) (origami-get-positions string ".*?\r?\n"))
@@ -153,20 +158,15 @@ position from first group or entire part of REGEXP."
 (defun origami-javadoc-parser (content)
   (let ((positions (->> (origami-get-positions content "/\\*\\*\\|\\*/")
                         (-filter (lambda (position)
-                                   (eq (get-text-property 0 'face (car position))
-                                       'font-lock-doc-face))))))
+                                   (origami-has-any-face? (car position) '(font-lock-doc-face)))))))
     (origami-build-pair-tree (rx "/**") (rx "*/") positions)))
 
 ;;;###autoload
 (defun origami-c-style-parser (content)
   (let ((positions (->> (origami-get-positions content "[{}]")
                         (cl-remove-if (lambda (position)
-                                        (let ((face (get-text-property 0 'face (car position))))
-                                          (-any? (lambda (f)
-                                                   (memq f '(font-lock-doc-face
-                                                             font-lock-comment-face
-                                                             font-lock-string-face)))
-                                                 (if (listp face) face (list face)))))))))
+                                        (origami-has-any-face? (car position)
+                                                               '(font-lock-doc-face font-lock-comment-face font-lock-string-face)))))))
     (origami-build-pair-tree "{" "}" positions)))
 
 (defun origami-c-macro-parser (content)
