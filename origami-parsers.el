@@ -120,27 +120,27 @@ position from first group or entire part of REGEXP."
         build-nodes
         cdr)))
 
-(defun origami-build-pair-tree (open close positions)
+(defun origami-build-pair-tree (open-regexp close-regexp positions)
   (cl-labels ((build (positions)
                      ;; this is so horrible, but fast
                      (let (acc beg (should-continue t))
                        (while (and should-continue positions)
-                         (cond ((equal (caar positions) open)
+                         (cond ((string-match open-regexp (caar positions))
                                 (if beg ;go down a level
                                     (let* ((res (build positions))
                                            (new-pos (car res))
                                            (children (cdr res)))
                                       (setq positions (cdr new-pos))
-                                      (setq acc (cons (origami-create-fold-node beg (cdar new-pos) (length open) children)
+                                      (setq acc (cons (origami-create-fold-node beg (cdar new-pos) (length (caar positions)) children)
                                                       acc))
                                       (setq beg nil))
                                   ;; begin a new pair
                                   (setq beg (cdar positions))
                                   (setq positions (cdr positions))))
-                               ((equal (caar positions) close)
+                               ((string-match close-regexp (caar positions))
                                 (if beg
                                     (progn ;close with no children
-                                      (setq acc (cons (origami-create-fold-node beg (cdar positions) (length close) nil)
+                                      (setq acc (cons (origami-create-fold-node beg (cdar positions) (length (caar positions)) nil)
                                                       acc))
                                       (setq positions (cdr positions))
                                       (setq beg nil))
@@ -155,7 +155,7 @@ position from first group or entire part of REGEXP."
                         (-filter (lambda (position)
                                    (eq (get-text-property 0 'face (car position))
                                        'font-lock-doc-face))))))
-    (origami-build-pair-tree "/**" "*/" positions)))
+    (origami-build-pair-tree (rx "/**") (rx "*/") positions)))
 
 ;;;###autoload
 (defun origami-c-style-parser (content)
