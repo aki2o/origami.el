@@ -50,7 +50,7 @@ position in the CONTENT."
       (reverse acc))))
 
 ;;;###autoload
-(defun origami-indent-parser (create)
+(defun origami-indent-parser (content)
   (cl-labels ((lines (string) (origami-get-positions string ".*?\r?\n"))
               (annotate-levels (lines)
                                (-map (lambda (line)
@@ -101,24 +101,23 @@ position in the CONTENT."
                                                (cl-destructuring-bind (children-end . children) (build-nodes (cdr nodes))
                                                  (let ((this-end (max children-end (end (car nodes)))))
                                                    (cons (max this-end (car acc))
-                                                         (cons (funcall create
-                                                                        (beg (car nodes))
-                                                                        this-end
-                                                                        (offset (car nodes))
-                                                                        children)
+                                                         (cons (origami-create-fold-node
+                                                                (beg (car nodes))
+                                                                this-end
+                                                                (offset (car nodes))
+                                                                children)
                                                                (cdr acc))))))
                                              '(0 . nil)
                                              tree))))
-    (lambda (content)
-      (-> content
-          lines
-          annotate-levels
-          collapse-same-level
-          create-tree
-          build-nodes
-          cdr))))
+    (-> content
+        lines
+        annotate-levels
+        collapse-same-level
+        create-tree
+        build-nodes
+        cdr)))
 
-(defun origami-build-pair-tree (create open close positions)
+(defun origami-build-pair-tree (open close positions)
   (cl-labels ((build (positions)
                      ;; this is so horrible, but fast
                      (let (acc beg (should-continue t))
@@ -129,7 +128,7 @@ position in the CONTENT."
                                            (new-pos (car res))
                                            (children (cdr res)))
                                       (setq positions (cdr new-pos))
-                                      (setq acc (cons (funcall create beg (cdar new-pos) (length open) children)
+                                      (setq acc (cons (origami-create-fold-node beg (cdar new-pos) (length open) children)
                                                       acc))
                                       (setq beg nil))
                                   ;; begin a new pair
@@ -138,7 +137,7 @@ position in the CONTENT."
                                ((equal (caar positions) close)
                                 (if beg
                                     (progn ;close with no children
-                                      (setq acc (cons (funcall create beg (cdar positions) (length close) nil)
+                                      (setq acc (cons (origami-create-fold-node beg (cdar positions) (length close) nil)
                                                       acc))
                                       (setq positions (cdr positions))
                                       (setq beg nil))
@@ -148,52 +147,47 @@ position in the CONTENT."
 
 ;;; TODO: tag these nodes? have ability to manipulate nodes that are
 ;;; tagged? in a scoped fashion?
-(defun origami-javadoc-parser (create)
-  (lambda (content)
-    (let ((positions (->> (origami-get-positions content "/\\*\\*\\|\\*/")
-                          (-filter (lambda (position)
-                                     (eq (get-text-property 0 'face (car position))
-                                         'font-lock-doc-face))))))
-      (origami-build-pair-tree create "/**" "*/" positions))))
+(defun origami-javadoc-parser (content)
+  (let ((positions (->> (origami-get-positions content "/\\*\\*\\|\\*/")
+                        (-filter (lambda (position)
+                                   (eq (get-text-property 0 'face (car position))
+                                       'font-lock-doc-face))))))
+    (origami-build-pair-tree "/**" "*/" positions)))
 
 ;;;###autoload
-(defun origami-c-style-parser (create)
-  (lambda (content)
-    (let ((positions (->> (origami-get-positions content "[{}]")
-                          (cl-remove-if (lambda (position)
-                                       (let ((face (get-text-property 0 'face (car position))))
-                                         (-any? (lambda (f)
-                                                  (memq f '(font-lock-doc-face
-                                                            font-lock-comment-face
-                                                            font-lock-string-face)))
-                                                (if (listp face) face (list face)))))))))
-      (origami-build-pair-tree create "{" "}" positions))))
+(defun origami-c-style-parser (content)
+  (let ((positions (->> (origami-get-positions content "[{}]")
+                        (cl-remove-if (lambda (position)
+                                        (let ((face (get-text-property 0 'face (car position))))
+                                          (-any? (lambda (f)
+                                                   (memq f '(font-lock-doc-face
+                                                             font-lock-comment-face
+                                                             font-lock-string-face)))
+                                                 (if (listp face) face (list face)))))))))
+    (origami-build-pair-tree "{" "}" positions)))
 
-(defun origami-c-macro-parser (create)
-  (lambda (content)
-    (let ((positions (origami-get-positions content "#if\\|#endif")))
-      (origami-build-pair-tree create "#if" "#endif" positions))))
+(defun origami-c-macro-parser (content)
+  (let ((positions (origami-get-positions content "#if\\|#endif")))
+    (origami-build-pair-tree "#if" "#endif" positions)))
 
 ;;;###autoload
-(defun origami-c-parser (create)
-  (let ((c-style (origami-c-style-parser create))
-        (macros (origami-c-macro-parser create)))
-    (lambda (content)
-      (origami-fold-children
-       (origami-fold-shallow-merge
-        (origami-fold-root-node (funcall c-style content))
-        (origami-fold-root-node (funcall macros content)))))))
+(defun origami-c-parser (content)
+  (let ((c-style (origami-c-style-parser content))
+        (macros (origami-c-macro-parser content)))
+    (origami-fold-children
+     (origami-fold-shallow-merge
+      (origami-fold-root-node (funcall c-style content))
+      (origami-fold-root-node (funcall macros content))))))
 
 ;;;###autoload
-(defun origami-java-parser (create)
-  (let ((c-style (origami-c-style-parser create))
-        (javadoc (origami-javadoc-parser create)))
-    (lambda (content)
-      (origami-fold-children
-       (origami-fold-shallow-merge (origami-fold-root-node (funcall c-style content))
-                                   (origami-fold-root-node (funcall javadoc content)))))))
+(defun origami-java-parser (content)
+  (let ((c-style (origami-c-style-parser content))
+        (javadoc (origami-javadoc-parser content)))
+    (origami-fold-children
+     (origami-fold-shallow-merge (origami-fold-root-node (funcall c-style content))
+                                 (origami-fold-root-node (funcall javadoc content))))))
 
-(defun origami-python-subparser (create beg end)
+(defun origami-python-subparser (beg end)
   "find all fold block between beg and end."
   (goto-char beg)
   (let (acc)
@@ -202,58 +196,55 @@ position in the CONTENT."
 	  (let* ((new-beg (point))
 		     (new-offset (progn (search-forward-regexp ":" nil t) (- (point) new-beg)))
 		     (new-end (progn (end-of-defun) (point))))
-	    (setq acc (cons (funcall create new-beg new-end new-offset
-				                 (origami-python-subparser create new-beg new-end))
+	    (setq acc (cons (origami-create-fold-node new-beg new-end new-offset
+				                                  (origami-python-subparser new-beg new-end))
 			            acc))
 	    (goto-char new-end)))
 	acc))
 
 ;;;###autoload
-(defun origami-python-parser (create)
-  (lambda (content)
-    (with-temp-buffer
-      (insert content)
-      (python-mode)
-      (origami-python-subparser create (point-min) (point-max)))))
+(defun origami-python-parser (content)
+  (with-temp-buffer
+    (insert content)
+    (python-mode)
+    (origami-python-subparser (point-min) (point-max))))
 
-(defun origami-lisp-parser (create regex)
-  (lambda (content)
-    (with-temp-buffer
-      (insert content)
-      (goto-char (point-min))
-      (beginning-of-defun -1)
-      (let (beg end offset acc)
-        (while (< (point) (point-max))
-          (setq beg (point))
-          (search-forward-regexp regex nil t)
-          (setq offset (- (point) beg))
-          (end-of-defun)
-          (backward-char)      ;move point to one after the last paren
-          (setq end (1- (point))) ;don't include the last paren in the fold
-          (when (> offset 0)
-            (setq acc (cons (funcall create beg end offset nil) acc)))
-          (beginning-of-defun -1))
-        (reverse acc)))))
+(defun origami-lisp-parser (content regex)
+  (with-temp-buffer
+    (insert content)
+    (goto-char (point-min))
+    (beginning-of-defun -1)
+    (let (beg end offset acc)
+      (while (< (point) (point-max))
+        (setq beg (point))
+        (search-forward-regexp regex nil t)
+        (setq offset (- (point) beg))
+        (end-of-defun)
+        (backward-char)      ;move point to one after the last paren
+        (setq end (1- (point))) ;don't include the last paren in the fold
+        (when (> offset 0)
+          (setq acc (cons (origami-create-fold-node beg end offset nil) acc)))
+        (beginning-of-defun -1))
+      (reverse acc))))
 
 ;;;###autoload
-(defun origami-elisp-parser (create)
-  (origami-lisp-parser create "(def\\w*\\s-*\\(\\s_\\|\\w\\|[:?!]\\)*\\([ \\t]*(.*?)\\)?"))
+(defun origami-elisp-parser (content)
+  (origami-lisp-parser content "(def\\w*\\s-*\\(\\s_\\|\\w\\|[:?!]\\)*\\([ \\t]*(.*?)\\)?"))
 
 ;;;###autoload
-(defun origami-clj-parser (create)
-  (origami-lisp-parser create "(def\\(\\w\\|-\\)*\\s-*\\(\\s_\\|\\w\\|[?!]\\)*\\([ \\t]*\\[.*?\\]\\)?"))
+(defun origami-clj-parser (content)
+  (origami-lisp-parser content "(def\\(\\w\\|-\\)*\\s-*\\(\\s_\\|\\w\\|[?!]\\)*\\([ \\t]*\\[.*?\\]\\)?"))
 
 (defmacro origami-define-markers-parser (name start-marker end-marker)
   "Create a parser for simple start and end markers."
   (let ((regex (rx-to-string `(or ,start-marker ,end-marker)))
         (name (intern (format "origami-%s-markers-parser" name))))
-    `(defun ,name (create)
-       (lambda (content)
-         (let ((positions (origami-get-positions content ,regex)))
-           (origami-build-pair-tree create ,start-marker ,end-marker positions))))))
+    `(defun ,name (content)
+       (let ((positions (origami-get-positions content ,regex)))
+         (origami-build-pair-tree ,start-marker ,end-marker positions)))))
 
 ;;;###autoload
-(defun origami-vim-like-markers-parser (_create))
+(defun origami-vim-like-markers-parser (_content))
 (with-no-warnings
   (origami-define-markers-parser "vim-like" "{{{" "}}}"))
 

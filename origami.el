@@ -543,24 +543,27 @@ was last built."
             (funcall contents)
             origami-fold-root-node)))))
 
+(defun origami-create-fold-node (beg end offset children)
+  (let* ((buffer (current-buffer))
+         (cached-tree (origami-get-cached-tree buffer))
+         (previous-fold (-last-item (origami-fold-find-path-with-range cached-tree beg end))))
+    (origami-fold-node beg end offset
+                       (if previous-fold (origami-fold-open? previous-fold) t)
+                       children
+                       (or (-> (origami-fold-find-path-with-range
+                                (origami-get-cached-tree buffer) beg end)
+                               -last-item
+                               origami-fold-data)
+                           (origami-create-overlay beg end offset buffer)))))
+
+(defvar origami-fold-style nil)
+(make-variable-buffer-local 'origami-fold-style)
+
 (defun origami-get-parser (buffer)
-  (let* ((cached-tree (origami-get-cached-tree buffer))
-         (create (lambda (beg end offset children)
-                   (let ((previous-fold (-last-item (origami-fold-find-path-with-range cached-tree beg end))))
-                     (origami-fold-node beg end offset
-                                        (if previous-fold (origami-fold-open? previous-fold) t)
-                                        children
-                                        (or (-> (origami-fold-find-path-with-range
-                                                 (origami-get-cached-tree buffer) beg end)
-                                                -last-item
-                                                origami-fold-data)
-                                            (origami-create-overlay beg end offset buffer)))))))
-    (-when-let (parser-gen (or (cdr (assoc (if (local-variable-p 'origami-fold-style)
-                                               (buffer-local-value 'origami-fold-style buffer)
-                                             (buffer-local-value 'major-mode buffer))
-                                           origami-parser-alist))
-                               'origami-indent-parser))
-      (funcall parser-gen create))))
+  (let ((parser-key (or (buffer-local-value 'origami-fold-style buffer)
+                        (buffer-local-value 'major-mode buffer))))
+    (or (assoc-default parser-key origami-parser-alist)
+        'origami-indent-parser)))
 
 (defun origami-get-fold-tree (buffer)
   "Facade. Build the tree if it hasn't already been built
