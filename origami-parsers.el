@@ -172,20 +172,17 @@ position in the CONTENT."
 
 ;;;###autoload
 (defun origami-c-parser (content)
-  (let ((c-style (origami-c-style-parser content))
-        (macros (origami-c-macro-parser content)))
-    (origami-fold-children
-     (origami-fold-shallow-merge
-      (origami-fold-root-node (funcall c-style content))
-      (origami-fold-root-node (funcall macros content))))))
+  (origami-fold-children
+   (origami-fold-shallow-merge
+    (origami-fold-root-node (origami-c-style-parser content))
+    (origami-fold-root-node (origami-c-macro-parser content)))))
 
 ;;;###autoload
 (defun origami-java-parser (content)
-  (let ((c-style (origami-c-style-parser content))
-        (javadoc (origami-javadoc-parser content)))
-    (origami-fold-children
-     (origami-fold-shallow-merge (origami-fold-root-node (funcall c-style content))
-                                 (origami-fold-root-node (funcall javadoc content))))))
+  (origami-fold-children
+   (origami-fold-shallow-merge
+    (origami-fold-root-node (origami-c-style-parser content))
+    (origami-fold-root-node (origami-javadoc-parser content)))))
 
 (defun origami-python-subparser (beg end)
   "find all fold block between beg and end."
