@@ -228,6 +228,19 @@ header overlay should cover. Result is a cons cell of (begin . end)."
   "Create a root container node."
   (origami-new-node 1 most-positive-fixnum 0 t children 'root))
 
+(defun origami-new-branch-node (beg end offset children)
+  (let* ((buffer (current-buffer))
+         (cached-tree (origami-get-cached-tree buffer))
+         (previous-fold (-last-item (origami-node-find-path-with-range cached-tree beg end))))
+    (origami-new-node beg end offset
+                      (if previous-fold (origami-node-open? previous-fold) t)
+                      children
+                      (or (-> (origami-node-find-path-with-range
+                               (origami-get-cached-tree buffer) beg end)
+                              -last-item
+                              origami-node-data)
+                          (origami-create-overlay beg end offset buffer)))))
+
 (defun origami-node-is-root? (node) (eq (origami-node-data node) 'root))
 
 (defun origami-node-beg (node)
@@ -542,19 +555,6 @@ was last built."
         (-> parser
             (funcall contents)
             origami-new-root-node)))))
-
-(defun origami-create-fold-node (beg end offset children)
-  (let* ((buffer (current-buffer))
-         (cached-tree (origami-get-cached-tree buffer))
-         (previous-fold (-last-item (origami-node-find-path-with-range cached-tree beg end))))
-    (origami-new-node beg end offset
-                      (if previous-fold (origami-node-open? previous-fold) t)
-                      children
-                      (or (-> (origami-node-find-path-with-range
-                               (origami-get-cached-tree buffer) beg end)
-                              -last-item
-                              origami-node-data)
-                          (origami-create-overlay beg end offset buffer)))))
 
 (defvar origami-fold-style nil)
 (make-variable-buffer-local 'origami-fold-style)

@@ -109,7 +109,7 @@ position from first group or entire part of REGEXP."
                                                (cl-destructuring-bind (children-end . children) (build-nodes (cdr nodes))
                                                  (let ((this-end (max children-end (end (car nodes)))))
                                                    (cons (max this-end (car acc))
-                                                         (cons (origami-create-fold-node
+                                                         (cons (origami-new-branch-node
                                                                 (beg (car nodes))
                                                                 this-end
                                                                 (offset (car nodes))
@@ -139,7 +139,7 @@ position from first group or entire part of REGEXP."
                                              (new-pos (car res))
                                              (children (cdr res)))
                                         (setq positions (cdr new-pos))
-                                        (setq acc (cons (origami-create-fold-node beg (cdar new-pos) (length open) children)
+                                        (setq acc (cons (origami-new-branch-node beg (cdar new-pos) (length open) children)
                                                         acc))
                                         (setq beg nil)
                                         (setq open nil))
@@ -152,7 +152,7 @@ position from first group or entire part of REGEXP."
                                     (string-match close-regexp-or-pred string))
                                   (if beg
                                       (progn ;close with no children
-                                        (setq acc (cons (origami-create-fold-node beg (cdar positions) (length open) nil)
+                                        (setq acc (cons (origami-new-branch-node beg (cdar positions) (length open) nil)
                                                         acc))
                                         (setq positions (cdr positions))
                                         (setq beg nil)
@@ -204,8 +204,8 @@ position from first group or entire part of REGEXP."
 	  (let* ((new-beg (point))
 		     (new-offset (progn (search-forward-regexp ":" nil t) (- (point) new-beg)))
 		     (new-end (progn (end-of-defun) (point))))
-	    (setq acc (cons (origami-create-fold-node new-beg new-end new-offset
-				                                  (origami-python-subparser new-beg new-end))
+	    (setq acc (cons (origami-new-branch-node new-beg new-end new-offset
+				                                 (origami-python-subparser new-beg new-end))
 			            acc))
 	    (goto-char new-end)))
 	acc))
@@ -231,7 +231,7 @@ position from first group or entire part of REGEXP."
         (backward-char)      ;move point to one after the last paren
         (setq end (1- (point))) ;don't include the last paren in the fold
         (when (> offset 0)
-          (setq acc (cons (origami-create-fold-node beg end offset nil) acc)))
+          (setq acc (cons (origami-new-branch-node beg end offset nil) acc)))
         (beginning-of-defun -1))
       (reverse acc))))
 
