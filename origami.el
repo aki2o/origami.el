@@ -93,20 +93,16 @@
   "Given a `fold-overlay', return the range that the corresponding
 header overlay should cover. Result is a cons cell of (begin . end)."
   (with-current-buffer (overlay-buffer fold-overlay)
-    (let ((fold-begin
-           (save-excursion
-             (goto-char (overlay-start fold-overlay))
-             (line-beginning-position)))
-          (fold-end
-           ;; Find the end of the folded region -- include the following
-           ;; newline if possible. The header will span the entire fold.
-           (save-excursion
-             (goto-char (overlay-end fold-overlay))
-             (when (looking-at ".")
-               (forward-char 1)
-               (when (looking-at "\n")
-                 (forward-char 1)))
-             (point))))
+    (let* ((fold-begin (- (overlay-start fold-overlay) (overlay-get fold-overlay 'origami-prefix)))
+           (fold-end
+            ;; Find the end of the folded region -- include the following
+            ;; newline if possible. The header will span the entire fold.
+            (save-excursion
+              (goto-char (+ (overlay-end fold-overlay) (overlay-get fold-overlay 'origami-suffix)))
+              (if (and (save-excursion (goto-char fold-begin) (= (point) (point-at-bol)))
+                       (= (point) (point-at-eol)))
+                  (1+ (point))
+                (point)))))
       (cons fold-begin fold-end))))
 
 (defun origami-header-overlay-reset-position (header-overlay)
@@ -117,14 +113,16 @@ header overlay should cover. Result is a cons cell of (begin . end)."
 (defun origami-header-modify-hook (header-overlay after-p _b _e &optional _l)
   (if after-p (origami-header-overlay-reset-position header-overlay)))
 
-(defun origami-create-overlay (beg end offset buffer)
-  (when (> (- end beg) 0)
-    (let ((ov (make-overlay (+ beg offset) end buffer)))
+(defun origami-create-overlay (beg end fold-beg fold-end buffer)
+  (when (origami-valid-node-point? beg end fold-beg fold-end)
+    (let ((ov (make-overlay fold-beg fold-end buffer)))
       (overlay-put ov 'creator 'origami)
       (overlay-put ov 'isearch-open-invisible 'origami-isearch-show)
       (overlay-put ov 'isearch-open-invisible-temporary
                    (lambda (ov hide-p) (if hide-p (origami-hide-overlay ov)
                                          (origami-show-overlay ov))))
+      (overlay-put ov 'origami-prefix (- fold-beg beg))
+      (overlay-put ov 'origami-suffix (- end fold-end))
       ;; We create a header overlay even when disabled; this could be avoided,
       ;; especially if we called origami-reset for each buffer if customizations
       ;; changed.
@@ -196,21 +194,22 @@ header overlay should cover. Result is a cons cell of (begin . end)."
 
 ;;; fold structure
 
-(defun origami-new-node (beg end offset open &optional children data)
+(defun origami-new-node (beg end fold-beg fold-end open &optional children data)
   (let ((sorted-children (-sort (lambda (a b)
-                                  (or (< (origami-node-beg a) (origami-node-beg b))
-                                      (and (= (origami-node-beg a) (origami-node-beg b))
-                                           (< (origami-node-end a) (origami-node-end b)))))
+                                  (cond ((not (= (origami-node-beg a) (origami-node-beg b)))
+                                         (< (origami-node-beg a) (origami-node-beg b)))
+                                        ((not (= (origami-node-fold-beg a) (origami-node-fold-beg b)))
+                                         (< (origami-node-fold-beg a) (origami-node-fold-beg b)))
+                                        ((not (= (origami-node-fold-end a) (origami-node-fold-end b)))
+                                         (< (origami-node-fold-end a) (origami-node-fold-end b)))
+                                        (t
+                                         (< (origami-node-end a) (origami-node-end b)))))
                                 (remove nil children))))
     ;; ensure invariant: no children overlap
     (when (-some? (lambda (pair)
                     (let ((a (car pair))
                           (b (cadr pair)))
-                      (when b ;for the odd numbered case - there may be a single item
-                        ;; the < function doesn't support varargs
-                        (or (>= (origami-node-beg a) (origami-node-end a))
-                            (>= (origami-node-end a) (origami-node-beg b))
-                            (>= (origami-node-beg b) (origami-node-end b))))))
+                      (and b (>= (origami-node-fold-end a) (origami-node-fold-beg b)))))
                   (-partition-all-in-steps 2 1 sorted-children))
       (error "Tried to construct a node where the children overlap or are not distinct regions: %s"
              sorted-children))
@@ -220,44 +219,67 @@ header overlay should cover. Result is a cons cell of (begin . end)."
       (if (and beg-children (or (> beg beg-children) (< end end-children)))
           (error "Node does not overlap children in range. beg=%s end=%s beg-children=%s end-children=%s"
                  beg end beg-children end-children)
-        (if (> (+ beg offset) end)
-            (error "Offset is not within the range of the node: beg=%s end=%s offset=%s" beg end offset)
-          (vector beg end offset open sorted-children data))))))
+        (if (origami-valid-node-point? beg end fold-beg fold-end)
+            (vector beg end fold-beg fold-end open sorted-children data)
+          (error "Invalid range of the node: beg=%s end=%s fold-beg=%s fold-end=%s" beg end fold-beg fold-end))))))
+
+(defun origami-valid-node-point? (beg end fold-beg fold-end)
+  (and (<= beg fold-beg)
+       (< fold-beg fold-end)
+       (<= fold-end end)))
 
 (defun origami-new-root-node (&optional children)
   "Create a root container node."
-  (origami-new-node 1 most-positive-fixnum 0 t children 'root))
+  (origami-new-node 1 most-positive-fixnum 1 most-positive-fixnum t children 'root))
 
-(defun origami-new-branch-node (beg end offset children)
+(defun origami-new-branch-node (beg end fold-beg fold-end children)
   (let* ((buffer (current-buffer))
          (cached-tree (origami-get-cached-tree buffer))
          (previous-fold (-last-item (origami-node-find-path-with-range cached-tree beg end))))
-    (origami-new-node beg end offset
+    (origami-new-node beg end fold-beg fold-end
                       (if previous-fold (origami-node-open? previous-fold) t)
                       children
                       (or (-> (origami-node-find-path-with-range
                                (origami-get-cached-tree buffer) beg end)
                               -last-item
                               origami-node-data)
-                          (origami-create-overlay beg end offset buffer)))))
+                          (origami-create-overlay beg end fold-beg fold-end buffer)))))
 
 (defun origami-node-is-root? (node) (eq (origami-node-data node) 'root))
 
 (defun origami-node-beg (node)
   (when node
-    (if (origami-node-is-root? node)
-        (aref node 0)
-      (- (overlay-start (origami-node-data node)) (origami-node-offset node)))))
+    (let ((beg (aref node 0))
+          (ov (origami-node-data node)))
+      (if (origami-node-is-root? node)
+          beg
+        (- (overlay-start ov) (overlay-get ov 'origami-prefix))))))
 
 (defun origami-node-end (node)
   (when node
-    (if (origami-node-is-root? node)
-        (aref node 1)
-      (overlay-end (origami-node-data node)))))
+    (let ((end (aref node 1))
+          (ov (origami-node-data node)))
+      (if (origami-node-is-root? node)
+          end
+        (+ (overlay-end ov) (overlay-get ov 'origami-suffix))))))
 
-(defun origami-node-offset (node) (when node (aref node 2)))
+(defun origami-node-fold-beg (node)
+  (when node
+    (let ((fold-beg (aref node 2))
+          (ov (origami-node-data node)))
+      (if (origami-node-is-root? node)
+          fold-beg
+        (overlay-start ov)))))
 
-(defun origami-node-open? (node) (when node (aref node 3)))
+(defun origami-node-fold-end (node)
+  (when node
+    (let ((fold-end (aref node 3))
+          (ov (origami-node-data node)))
+      (if (origami-node-is-root? node)
+          fold-end
+        (overlay-end ov)))))
+
+(defun origami-node-open? (node) (when node (aref node 4)))
 
 (defun origami-node-open-set (node value)
   (when node
@@ -265,23 +287,25 @@ header overlay should cover. Result is a cons cell of (begin . end)."
         node
       (origami-new-node (origami-node-beg node)
                         (origami-node-end node)
-                        (origami-node-offset node)
+                        (origami-node-fold-beg node)
+                        (origami-node-fold-end node)
                         value
                         (origami-node-children node)
                         (origami-node-data node)))))
 
-(defun origami-node-children (node) (when node (aref node 4)))
+(defun origami-node-children (node) (when node (aref node 5)))
 
 (defun origami-node-children-set (node children)
   (when node
     (origami-new-node (origami-node-beg node)
                       (origami-node-end node)
-                      (origami-node-offset node)
+                      (origami-node-fold-beg node)
+                      (origami-node-fold-end node)
                       (origami-node-open? node)
                       children
                       (origami-node-data node))))
 
-(defun origami-node-data (node) (when node (aref node 5)))
+(defun origami-node-data (node) (when node (aref node 6)))
 
 ;;; fold structure utils
 

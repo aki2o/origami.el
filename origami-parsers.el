@@ -73,7 +73,7 @@ position from first group or entire part of REGEXP."
               (indent (line) (if (eq line 'newline) -1 (aref line 0)))
               (beg (line) (aref line 1))
               (end (line) (aref line 2))
-              (offset (line) (aref line 3))
+              (fold-beg (line) (aref line 3))
               (collapse-same-level (lines)
                                    (->>
                                     (cdr lines)
@@ -83,7 +83,7 @@ position from first group or entire part of REGEXP."
                                                            (cons (vector (indent (car acc))
                                                                          (beg (car acc))
                                                                          (end line)
-                                                                         (offset (car acc)))
+                                                                         (fold-beg (car acc)))
                                                                  (cdr acc)))
                                                           (t (cons line acc))))
                                                   (list (car lines)))
@@ -112,7 +112,8 @@ position from first group or entire part of REGEXP."
                                                          (cons (origami-new-branch-node
                                                                 (beg (car nodes))
                                                                 this-end
-                                                                (offset (car nodes))
+                                                                (fold-beg (car nodes))
+                                                                this-end
                                                                 children)
                                                                (cdr acc))))))
                                              '(0 . nil)
@@ -130,30 +131,37 @@ position from first group or entire part of REGEXP."
                      ;; this is so horrible, but fast
                      (let (acc beg open (should-continue t))
                        (while (and should-continue positions)
-                         (let ((string (caar positions)))
+                         (let ((string (caar positions))
+                               (point (cdar positions)))
                            (cond ((if (functionp open-regexp-or-pred)
                                       (funcall open-regexp-or-pred string)
                                     (string-match open-regexp-or-pred string))
                                   (if beg ;go down a level
                                       (let* ((res (build positions))
                                              (new-pos (car res))
-                                             (children (cdr res)))
+                                             (children (cdr res))
+                                             (fold-end (cdar new-pos))
+                                             (close (caar new-pos))
+                                             (end (+ fold-end (length close)))
+                                             (fold-beg (+ beg (length open))))
                                         (setq positions (cdr new-pos))
-                                        (setq acc (cons (origami-new-branch-node beg (cdar new-pos) (length open) children)
-                                                        acc))
+                                        (when (< fold-beg fold-end)
+                                          (setq acc (cons (origami-new-branch-node beg end fold-beg fold-end children) acc)))
                                         (setq beg nil)
                                         (setq open nil))
                                     ;; begin a new pair
-                                    (setq beg (cdar positions))
+                                    (setq beg point)
                                     (setq open string)
                                     (setq positions (cdr positions))))
                                  ((if (functionp close-regexp-or-pred)
                                       (funcall close-regexp-or-pred string)
                                     (string-match close-regexp-or-pred string))
-                                  (if beg
-                                      (progn ;close with no children
-                                        (setq acc (cons (origami-new-branch-node beg (cdar positions) (length open) nil)
-                                                        acc))
+                                  (if beg ;close with no children
+                                      (let* ((fold-beg (+ beg (length open)))
+                                             (fold-end point)
+                                             (end (+ fold-end (length string))))
+                                        (when (< fold-beg fold-end)
+                                          (setq acc (cons (origami-new-branch-node beg end fold-beg fold-end nil) acc)))
                                         (setq positions (cdr positions))
                                         (setq beg nil)
                                         (setq open nil))
@@ -174,8 +182,15 @@ position from first group or entire part of REGEXP."
   (let ((positions (->> (origami-get-positions content "[{}]")
                         (cl-remove-if (lambda (position)
                                         (origami-has-any-face? (car position)
-                                                               '(font-lock-doc-face font-lock-comment-face font-lock-string-face)))))))
-    (origami-build-pair-tree "{" "}" positions)))
+                                                               '(font-lock-doc-face font-lock-comment-face font-lock-string-face))))
+                        (-map (lambda (position)
+                                (goto-char (cdr position))
+                                (if (re-search-backward (rx (or bol ";")) nil t)
+                                    (cons (concat (buffer-substring-no-properties (match-end 0) (cdr position))
+                                                  (car position))
+                                          (match-end 0))
+                                  position))))))
+    (origami-build-pair-tree (rx "{" eos) "}" positions)))
 
 (defun origami-c-macro-parser (content)
   (let ((positions (origami-get-positions content "#if\\|#endif")))
@@ -201,10 +216,12 @@ position from first group or entire part of REGEXP."
   (let (acc)
 	;; iterate all same level children.
 	(while (and (beginning-of-defun -1) (<= (point) end)) ;; have children between beg and end?
-	  (let* ((new-beg (point))
-		     (new-offset (progn (search-forward-regexp ":" nil t) (- (point) new-beg)))
+	  (let* ((new-beg (if (looking-back (rx (+ (any " \t"))) nil t)
+                          (match-beginning 0)
+                        (point)))
+		     (new-fold-beg (progn (search-forward-regexp ":" nil t) (point)))
 		     (new-end (progn (end-of-defun) (point))))
-	    (setq acc (cons (origami-new-branch-node new-beg new-end new-offset
+	    (setq acc (cons (origami-new-branch-node new-beg new-end new-fold-beg new-end
 				                                 (origami-python-subparser new-beg new-end))
 			            acc))
 	    (goto-char new-end)))
@@ -222,16 +239,17 @@ position from first group or entire part of REGEXP."
     (insert content)
     (goto-char (point-min))
     (beginning-of-defun -1)
-    (let (beg end offset acc)
+    (let (beg end fold-beg fold-end acc)
       (while (< (point) (point-max))
         (setq beg (point))
         (search-forward-regexp regex nil t)
-        (setq offset (- (point) beg))
+        (setq fold-beg (point))
         (end-of-defun)
         (backward-char)      ;move point to one after the last paren
-        (setq end (1- (point))) ;don't include the last paren in the fold
-        (when (> offset 0)
-          (setq acc (cons (origami-new-branch-node beg end offset nil) acc)))
+        (setq fold-end (1- (point))) ;don't include the last paren in the fold
+        (setq end (point))
+        (when (> fold-beg beg)
+          (setq acc (cons (origami-new-branch-node beg end fold-beg fold-end nil) acc)))
         (beginning-of-defun -1))
       (reverse acc))))
 
