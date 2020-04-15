@@ -55,6 +55,7 @@
     (go-mode               . origami-c-style-parser)
     (php-mode              . origami-c-style-parser)
     (python-mode           . origami-python-parser)
+    (ruby-mode             . origami-ruby-parser)
     (emacs-lisp-mode       . origami-elisp-parser)
     (lisp-interaction-mode . origami-elisp-parser)
     (clojure-mode          . origami-clj-parser)

@@ -234,6 +234,92 @@ position from first group or entire part of REGEXP."
     (python-mode)
     (origami-python-subparser (point-min) (point-max))))
 
+(defun origami-ruby-block-parser (content)
+  (let* ((positions '())
+         (end-position-re (rx bos "end" eos))
+         (open-position? (lambda (s)
+                           (not (string-match end-position-re s))))
+         (end-position? (lambda (s)
+                          (string-match end-position-re s))))
+    (with-temp-buffer
+      (insert content)
+      (let* ((ignore-faces '(font-lock-doc-face font-lock-comment-face font-lock-string-face))
+             (ignore-position? (lambda (position)
+                                 (origami-has-any-face? (car position) ignore-faces)))
+             (open-re-maker (lambda (&rest words)
+                              (rx-to-string `(and (or bol ";") (* (any " \t")) (group (or ,@words)) (or eol space "\\")))))
+             (fix-open-prefix (lambda (position &rest end-words)
+                                (let ((pt (progn
+                                            (goto-char (cdr position))
+                                            (if (looking-back (rx (+ (any " \t"))) nil t)
+                                                (match-beginning 0)
+                                              (point)))))
+                                  (re-search-forward (rx-to-string `(or eol ,@end-words)) nil t)
+                                  (cons (buffer-substring-no-properties pt (point)) pt))))
+             (end-positions (->> (origami-get-positions content (rx (or bol space) (group "end") (or eol space)))
+                                 (cl-remove-if ignore-position?)))
+             (do-positions (->> (origami-get-positions content (rx (or bol space) (group "do") (or eol space)))
+                                (cl-remove-if ignore-position?)
+                                (-map (lambda (position)
+                                        (goto-char (cdr position))
+                                        (if (re-search-backward (rx (or bol ";")) nil t)
+                                            (cons (concat (buffer-substring-no-properties (match-end 0) (cdr position))
+                                                          (car position))
+                                                  (match-end 0))
+                                          position)))))
+             (loop-positions (->> (origami-get-positions content (funcall open-re-maker "for" "while" "until"))
+                                  (cl-remove-if ignore-position?)
+                                  (-map (lambda (position) (funcall fix-open-prefix position ";" "do")))))
+             (loop-positions (cl-remove-if
+                              (lambda (position)
+                                ;; A loop syntax accepts expression with `do' like the following code.
+                                ;;
+                                ;; while (
+                                ;;   i += 1
+                                ;; ) < limit do
+                                ;;   something
+                                ;; end
+                                ;;
+                                ;; Therefore, reject if next `do' has found before `end' or nested loop syntax start.
+                                (let ((do-position (or (-first (lambda (x) (> (cdr x) (cdr position))) do-positions) (point-max)))
+                                      (end-position (or (-first (lambda (x) (> (cdr x) (cdr position))) end-positions) (point-max)))
+                                      (loop-position (or (-first (lambda (x) (> (cdr x) (cdr position))) loop-positions) (point-max))))
+                                  (and (< do-position end-position)
+                                       (< do-position loop-position))))
+                              loop-positions))
+             (if-positions (->> (origami-get-positions content (funcall open-re-maker "if" "unless"))
+                                (cl-remove-if ignore-position?)
+                                (-map (lambda (position) (funcall fix-open-prefix position ";" "then")))))
+             (other-positions (->> (origami-get-positions content (funcall open-re-maker "class" "module" "def" "begin" "case"))
+                                   (cl-remove-if ignore-position?)
+                                   (-map (lambda (position) (funcall fix-open-prefix position ";"))))))
+        (setq positions (--sort (< (cdr it) (cdr other))
+                                (append end-positions do-positions loop-positions if-positions other-positions)))))
+    (origami-build-pair-tree open-position? end-position? positions)))
+
+(defun origami-ruby-paren-parser (content)
+  (let* ((ignore-faces '(font-lock-doc-face font-lock-comment-face font-lock-string-face))
+         (ignore-position? (lambda (position)
+                             (origami-has-any-face? (car position) ignore-faces)))
+         (positions (->> (origami-get-positions content (rx (any "{}[]")))
+                         (cl-remove-if ignore-position?)
+                         (-map (lambda (position)
+                                 (goto-char (cdr position))
+                                 (if (and (string-equal (car position) "{")
+                                          (re-search-backward (rx (or bol ";")) nil t))
+                                     (cons (concat (buffer-substring-no-properties (match-end 0) (cdr position))
+                                                   (car position))
+                                           (match-end 0))
+                                   position))))))
+    (origami-build-pair-tree (rx (any "{[") eos) (rx (any "}]")) positions)))
+
+;;;###autoload
+(defun origami-ruby-parser (content)
+  (origami-node-children
+   (origami-node-shallow-merge
+    (origami-new-root-node (origami-ruby-block-parser content))
+    (origami-new-root-node (origami-ruby-paren-parser content)))))
+
 (defun origami-lisp-parser (content regex)
   (with-temp-buffer
     (insert content)
