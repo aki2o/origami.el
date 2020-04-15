@@ -125,12 +125,14 @@ position from first group or entire part of REGEXP."
         build-nodes
         cdr)))
 
-(defun origami-build-pair-tree (open-regexp close-regexp positions)
+(defun origami-build-pair-tree (open-regexp-or-pred close-regexp-or-pred positions)
   (cl-labels ((build (positions)
                      ;; this is so horrible, but fast
                      (let (acc beg (should-continue t))
                        (while (and should-continue positions)
-                         (cond ((string-match open-regexp (caar positions))
+                         (cond ((if (functionp open-regexp-or-pred)
+                                    (funcall open-regexp-or-pred (caar positions))
+                                  (string-match open-regexp-or-pred (caar positions)))
                                 (if beg ;go down a level
                                     (let* ((res (build positions))
                                            (new-pos (car res))
@@ -142,7 +144,9 @@ position from first group or entire part of REGEXP."
                                   ;; begin a new pair
                                   (setq beg (cdar positions))
                                   (setq positions (cdr positions))))
-                               ((string-match close-regexp (caar positions))
+                               ((if (functionp close-regexp-or-pred)
+                                    (funcall close-regexp-or-pred (caar positions))
+                                  (string-match close-regexp-or-pred (caar positions)))
                                 (if beg
                                     (progn ;close with no children
                                       (setq acc (cons (origami-create-fold-node beg (cdar positions) (length (caar positions)) nil)
