@@ -251,22 +251,22 @@ header overlay should cover. Result is a cons cell of (begin . end)."
     (if (origami-node-is-root? node)
         node
       (origami-new-node (origami-node-beg node)
-                         (origami-node-end node)
-                         (origami-node-offset node)
-                         value
-                         (origami-node-children node)
-                         (origami-node-data node)))))
+                        (origami-node-end node)
+                        (origami-node-offset node)
+                        value
+                        (origami-node-children node)
+                        (origami-node-data node)))))
 
 (defun origami-node-children (node) (when node (aref node 4)))
 
 (defun origami-node-children-set (node children)
   (when node
     (origami-new-node (origami-node-beg node)
-                       (origami-node-end node)
-                       (origami-node-offset node)
-                       (origami-node-open? node)
-                       children
-                       (origami-node-data node))))
+                      (origami-node-end node)
+                      (origami-node-offset node)
+                      (origami-node-open? node)
+                      children
+                      (origami-node-data node))))
 
 (defun origami-node-data (node) (when node (aref node 5)))
 
@@ -398,11 +398,11 @@ with the current state and the current node at each iteration."
 (defun origami-node-shallow-merge (tree1 tree2)
   "Shallow merge the children of TREE2 in to TREE1."
   (-reduce-from (lambda (tree node)
-  (origami-node-assoc (origami-node-find-path-containing-range tree
+                  (origami-node-assoc (origami-node-find-path-containing-range tree
                                                                                (origami-node-beg node)
                                                                                (origami-node-end node))
                                       (lambda (leaf)
-  (origami-node-add-child leaf node))))
+                                        (origami-node-add-child leaf node))))
                 tree1 (origami-node-children tree2)))
 
 (defun origami-node-parent (path)
@@ -548,13 +548,13 @@ was last built."
          (cached-tree (origami-get-cached-tree buffer))
          (previous-fold (-last-item (origami-node-find-path-with-range cached-tree beg end))))
     (origami-new-node beg end offset
-                       (if previous-fold (origami-node-open? previous-fold) t)
-                       children
-                       (or (-> (origami-node-find-path-with-range
-                                (origami-get-cached-tree buffer) beg end)
-                               -last-item
-                               origami-node-data)
-                           (origami-create-overlay beg end offset buffer)))))
+                      (if previous-fold (origami-node-open? previous-fold) t)
+                      children
+                      (or (-> (origami-node-find-path-with-range
+                               (origami-get-cached-tree buffer) beg end)
+                              -last-item
+                              origami-node-data)
+                          (origami-create-overlay beg end offset buffer)))))
 
 (defvar origami-fold-style nil)
 (make-variable-buffer-local 'origami-fold-style)
