@@ -183,17 +183,17 @@ position from first group or entire part of REGEXP."
 
 ;;;###autoload
 (defun origami-c-parser (content)
-  (origami-fold-children
-   (origami-fold-shallow-merge
-    (origami-fold-root-node (origami-c-style-parser content))
-    (origami-fold-root-node (origami-c-macro-parser content)))))
+  (origami-node-children
+   (origami-node-shallow-merge
+    (origami-new-root-node (origami-c-style-parser content))
+    (origami-new-root-node (origami-c-macro-parser content)))))
 
 ;;;###autoload
 (defun origami-java-parser (content)
-  (origami-fold-children
-   (origami-fold-shallow-merge
-    (origami-fold-root-node (origami-c-style-parser content))
-    (origami-fold-root-node (origami-javadoc-parser content)))))
+  (origami-node-children
+   (origami-node-shallow-merge
+    (origami-new-root-node (origami-c-style-parser content))
+    (origami-new-root-node (origami-javadoc-parser content)))))
 
 (defun origami-python-subparser (beg end)
   "find all fold block between beg and end."
